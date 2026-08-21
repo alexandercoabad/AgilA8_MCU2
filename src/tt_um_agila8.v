@@ -216,18 +216,33 @@ module tt_um_agila8 (
         // imem_addr>=0x0100 is the traditional flash range (rebase by
         // -0x100, unaffected by flash_mode); imem_addr<0x0100 only
         // reaches this mux branch at all when flash_imem_hit is true,
-        // which (given boot_rom_hit/shared_ram_imem_hit above) only
-        // happens for 0x0080-0x00FF under flash_mode - rebase by -0x80
-        // there instead, so flash's own byte 0 lines up with the
-        // 0x0080 JALR target both the successful-load and timeout
-        // paths use. Verified against sim_full_top.py, an independent
-        // from-scratch model of this exact routing (see that file for
-        // the two earlier, wrong versions of this line it caught: an
-        // unconditional -0x100 that underflowed for imem_addr<0x100,
-        // and a flash_mode_r-ternary that passed imem_addr through
-        // completely unrebased instead of rebasing by -0x80).
-        .flash_addr           ((imem_addr < 16'h0100) ? (imem_addr - 16'h0080)
-                                                        : (imem_addr - 16'h0100)),
+        // which (given boot_rom_hit/shared_ram_imem_hit above) means
+        // imem_addr>=0x0080 always (boot_rom already claims everything
+        // below that) - rebase by -0x80 UNCONDITIONALLY, so flash's own
+        // byte 0 lines up with the 0x0080 JALR target both the
+        // successful-load and timeout paths use, and stays continuous
+        // for any flash-mode program that naturally runs past 0x00FF.
+        //
+        // *** BUG FIX (see chat): this used to special-case
+        // imem_addr>=0x0100 with a DIFFERENT rebase (-0x100 instead of
+        // -0x80) - a leftover from an earlier design iteration, before
+        // FLASH_MODE existed, when flash access genuinely started fresh
+        // at imem 0x0100. Under the current design neither real entry
+        // path (successful load, or the timeout fallback) ever starts
+        // there anymore - both land at 0x0080 - so that branch was
+        // actively wrong for the one case that still reached it: a
+        // flash-mode program longer than 128 bytes. Confirmed by
+        // simulation: crossing imem_addr 0x00FE -> 0x0100 made
+        // flash_addr jump 0x7E -> 0x00 instead of continuing to 0x80 -
+        // flash offsets 0x00-0x7F silently re-executed a second time
+        // before continuing, now shifted 0x80 bytes off from where the
+        // program actually is. A single, unconditional -0x80 rebase
+        // (below) has no such discontinuity - see sim_full_top.py's
+        // TEST 2c for the boundary-continuity check this fix is based
+        // on (the two-instructions-plus-marker test that catches this
+        // specific class of bug, as opposed to an all-NOP body, which
+        // can't distinguish a wrap from correct continuation).
+        .flash_addr           (imem_addr - 16'h0080),
         .flash_valid          (imem_valid && flash_imem_hit),
         .flash_rdata          (flash_rdata_w),
         .flash_ready          (flash_ready_w),
